@@ -1,0 +1,190 @@
+Kaiburr DevOps Assessment completion
+
+Task 2:
+Create separate step to your pipeline for scanning images - use Trivy to scan the container
+image for vulnerability. If the images have HIGH or Critical Vulnerablities, the CI code should
+have a logic to abort the build
+
+stages:
+  - build
+  - scan
+
+variables:
+  # Define your variables here, such as image name, tag, and Trivy version.
+  DOCKER_IMAGE_NAME: my-app
+  DOCKER_IMAGE_TAG: latest
+
+before_script:
+  # Install and configure Trivy
+  - apk add trivy  # You may need to adjust this depending on your runner's OS.
+  - trivy --download-db
+
+build:
+  stage: build
+  script:
+    # Build your Docker image here
+    - docker build -t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} .
+
+scan:
+  stage: scan
+  script:
+    # Scan the Docker image using Trivy
+    - trivy_report=$(trivy --severity HIGH,CRITICAL --no-progress -f json ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG})
+    - echo "$trivy_report"  # Print Trivy scan report
+    - high_vulnerabilities=$(echo "$trivy_report" | jq -r '.[].Vulnerabilities | length')
+    - if [ "$high_vulnerabilities" -gt 0 ]; then
+        echo "Found $high_vulnerabilities high vulnerabilities. Aborting the pipeline.";
+        exit 1;
+      else
+        echo "No high vulnerabilities found.";
+      fi
+  only:
+    - master  # Define the branch you want to scan the image on
+
+
+Task 3:
+Add a step in CI for code quality/code coverage – Use blackduck or sonarqube as a part of
+pipeline job.
+
+stages:
+  - build
+  - analyze
+
+variables:
+  # Define your variables here, such as project key and SonarQube token.
+  SONARQUBE_PROJECT_KEY: your_project_key
+  SONARQUBE_TOKEN: your_sonarqube_token
+  SONARQUBE_URL: http://your_sonarqube_server:9000  # Replace with your SonarQube server URL
+
+before_script:
+  # Install SonarScanner
+  - apk add openjdk11
+  - wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-4.6.2.2472-linux.zip
+  - unzip sonar-scanner-cli-4.6.2.2472-linux.zip
+  - export PATH=$PATH:$(pwd)/sonar-scanner-4.6.2.2472-linux/bin
+
+build:
+  stage: build
+  script:
+    # Build your code here
+    - echo "Building your code..."
+
+analyze:
+  stage: analyze
+  script:
+    # Run SonarQube analysis
+    - sonar-scanner -Dsonar.projectKey=${SONARQUBE_PROJECT_KEY} -Dsonar.sources=src -Dsonar.host.url=${SONARQUBE_URL} -Dsonar.login=${SONARQUBE_TOKEN}
+  only:
+    - master  # Define the branch you want to analyze
+
+
+Task 4:
+As a part of CI Step, authenticate and deploy this container image in kubernetes backed by
+required kubernetes service.
+
+stages:
+  - build
+  - deploy
+
+variables:
+  # Define your variables here, such as image name, tag, and Kubernetes configuration files.
+  DOCKER_IMAGE_NAME: my-app
+  DOCKER_IMAGE_TAG: latest
+  KUBE_NAMESPACE: my-namespace
+  KUBE_CONFIG: $CI_PROJECT_DIR/kubeconfig.yaml  # Path to your Kubernetes config file
+  KUBE_DEPLOYMENT: $CI_PROJECT_DIR/deployment.yaml  # Path to your Kubernetes deployment manifest
+  KUBE_SERVICE: $CI_PROJECT_DIR/service.yaml  # Path to your Kubernetes service manifest
+
+before_script:
+  # Authenticate to the Kubernetes cluster
+  - mkdir -p $HOME/.kube
+  - cp $KUBE_CONFIG $HOME/.kube/config
+
+build:
+  stage: build
+  script:
+    # Build your Docker image here
+    - docker build -t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} .
+
+deploy:
+  stage: deploy
+  script:
+    # Deploy your application to Kubernetes
+    - kubectl apply -n ${KUBE_NAMESPACE} -f ${KUBE_DEPLOYMENT}
+    - kubectl apply -n ${KUBE_NAMESPACE} -f ${KUBE_SERVICE}
+  only:
+    - master  # Define the branch you want to trigger deployment from
+
+
+
+
+Task 5:
+Deploy this code with argocd and using helm or Kustomize. Design the helm charts in such way
+that charts can deployed across multiple environments just by updating the values.yaml
+
+Step 1: Install argocd
+Step 2: Containerize Application
+# Use an official Node.js runtime as a parent image
+FROM node:14
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy package.json and package-lock.json to the working directory
+COPY package*.json ./
+
+# Install application dependencies
+RUN npm install
+
+# Copy your application code to the container
+COPY . .
+
+# Expose a port (if needed)
+EXPOSE 3000
+
+# Define the command to run your application
+CMD ["node", "app.js"]
+
+Step 3:Create Helm Templates
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-deployment
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: {{ .Release.Name }}-container
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          ports:
+            - containerPort: {{ .Values.containerPort }}
+
+Step 4:Create an ArgoCD Application YAML file (argocd-app.yaml)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-nodejs-app
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    helm:
+      valueFiles:
+        - values.yaml
+    repoURL: <URL_TO_YOUR_HELM_REPO>
+    targetRevision: HEAD
+  syncPolicy:
+    automated: {}
+
+Step 5:Deploy to Multiple Environments:
+kubectl apply -f argocd-app-dev.yaml
+kubectl apply -f argocd-app-staging.yaml
+kubectl apply -f argocd-app-prod.yaml
+
+Step 6:To update the configuration for a specific environment, simply edit the values.yaml file for that environment and sync the ArgoCD application. 
+ArgoCD will automatically apply the changes to the corresponding environment.
